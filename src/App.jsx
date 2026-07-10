@@ -105,6 +105,24 @@ function classify(items, fromDate, createdField, modifiedField) {
   return { created, modified };
 }
 
+function resolutionStats(items, createdField, closedField) {
+  let totalHours = 0;
+  let count = 0;
+  for (const it of items) {
+    const created = it?.[createdField] ? new Date(it[createdField]) : null;
+    const closed = it?.[closedField] ? new Date(it[closedField]) : null;
+    if (created && closed && !isNaN(created) && !isNaN(closed) && closed >= created) {
+      totalHours += (closed - created) / 36e5;
+      count++;
+    }
+  }
+  return { totalHours, count };
+}
+
+function formatDuration(hours) {
+  if (hours == null) return "—";
+  return hours < 24 ? `${hours.toFixed(1)} h` : `${(hours / 24).toFixed(1)} d`;
+}
 
 async function tracedFetch(onTrace, { label, url, method, headers, body }) {
   const startedAt = performance.now();
@@ -269,6 +287,8 @@ async function fetchProjectUsage(project, period, onTrace) {
 
   const byModule = {};
   const total = { requestsCreated: 0, requestsModified: 0, ordersCreated: 0, ordersModified: 0 };
+  let totalResolutionHours = 0;
+  let totalResolutionCount = 0;
 
   for (const module of MODULES) {
     const reqItems = await fetchListItems(onTrace, {
@@ -292,12 +312,16 @@ async function fetchProjectUsage(project, period, onTrace) {
 
     const reqStats = classify(reqItems, fromDate, "localcreatefirstticketdate", "utcmodificationdate");
     const ordStats = classify(ordItems, fromDate, "localordertdate", "utcmodificationdate");
+    const ordResolution = resolutionStats(ordItems, "localordertdate", "localclosedate");
 
     const moduleResult = {
       requestsCreated: reqStats.created,
       requestsModified: reqStats.modified,
       ordersCreated: ordStats.created,
       ordersModified: ordStats.modified,
+      ordersClosedCount: ordResolution.count,
+      ordersAvgResolutionHours:
+        ordResolution.count > 0 ? ordResolution.totalHours / ordResolution.count : null,
     };
 
     byModule[module.id] = moduleResult;
@@ -305,9 +329,17 @@ async function fetchProjectUsage(project, period, onTrace) {
     total.requestsModified += moduleResult.requestsModified;
     total.ordersCreated += moduleResult.ordersCreated;
     total.ordersModified += moduleResult.ordersModified;
+    totalResolutionHours += ordResolution.totalHours;
+    totalResolutionCount += ordResolution.count;
   }
 
-  return { ...total, byModule };
+  return {
+    ...total,
+    ordersClosedCount: totalResolutionCount,
+    ordersAvgResolutionHours:
+      totalResolutionCount > 0 ? totalResolutionHours / totalResolutionCount : null,
+    byModule,
+  };
 }
 
 const emptyForm = {
@@ -1095,6 +1127,7 @@ export default function ManttestUsageMonitor() {
                               <th>Sol. modificadas</th>
                               <th>Órd. creadas</th>
                               <th>Órd. modificadas</th>
+                              <th>Cierre medio OTs</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1107,12 +1140,20 @@ export default function ManttestUsageMonitor() {
                                   <td>{mr?.requestsModified ?? 0}</td>
                                   <td>{mr?.ordersCreated ?? 0}</td>
                                   <td>{mr?.ordersModified ?? 0}</td>
+                                  <td>{formatDuration(mr?.ordersAvgResolutionHours)}</td>
                                 </tr>
                               );
                             })}
                           </tbody>
                         </table>
                       </div>
+                    )}
+
+                    {r.ordersClosedCount > 0 && (
+                      <p className="mum-hint" style={{ marginTop: 8 }}>
+                        Tiempo medio de cierre de OTs: {formatDuration(r.ordersAvgResolutionHours)}{" "}
+                        (sobre {r.ordersClosedCount} cerradas en el periodo).
+                      </p>
                     )}
                   </>
                 )}
