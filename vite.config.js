@@ -5,10 +5,10 @@ export default defineConfig({
   plugins: [react()],
 server: {
     host: '0.0.0.0',
-    allowedHosts: ['gpx-splitter.onrender.com'],
+    allowedHosts: ['mmonitor.onrender.com'],
   },
   preview: {
     host: '0.0.0.0',
-    allowedHosts: ['gpx-splitter.onrender.com'],
+    allowedHosts: ['mmonitor.onrender.com'],
   },   
 });
