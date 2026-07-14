@@ -51,6 +51,9 @@ const METRIC_META = [
   { key: "requestsModified", label: "Solicitudes modificadas", color: "#2FA69A" },
   { key: "ordersCreated", label: "Órdenes creadas", color: "#F2A65A" },
   { key: "ordersModified", label: "Órdenes modificadas", color: "#E0793C" },
+  { key: "checkmobilDemanat", label: "Check mobile: demandados", color: "#4C8BF5" },
+  { key: "checkmobilRetornat", label: "Check mobile: retornados", color: "#B34FD1" },
+  { key: "checkmobilPendent", label: "Check mobile: pendientes", color: "#E0637C" },
 ];
 
 function uid() {
@@ -103,6 +106,30 @@ function classify(items, fromDate, createdField, modifiedField) {
     if (m && !isNaN(m) && m >= fromDate) modified++;
   }
   return { created, modified };
+}
+
+function checkmobilStats(items, fromDate) {
+  let demanat = 0;
+  let retornat = 0;
+  let pendent = 0;
+  const byEntity = {};
+
+  for (const it of items) {
+    const d = it?.datautc ? new Date(it.datautc) : null;
+    if (!d || isNaN(d) || d < fromDate) continue;
+
+    demanat += it.demanat || 0;
+    retornat += it.retornat || 0;
+    pendent += it.pendent || 0;
+
+    const key = it.entity ?? "—";
+    if (!byEntity[key]) byEntity[key] = { entity: key, demanat: 0, retornat: 0, pendent: 0 };
+    byEntity[key].demanat += it.demanat || 0;
+    byEntity[key].retornat += it.retornat || 0;
+    byEntity[key].pendent += it.pendent || 0;
+  }
+
+  return { demanat, retornat, pendent, byEntity: Object.values(byEntity) };
 }
 
 function resolutionStats(items, createdField, closedField) {
@@ -230,6 +257,33 @@ async function fetchListItems(onTrace, { label, url, headers, template, fromISO,
   return items;
 }
 
+async function fetchCheckmobilList(onTrace, { label, url, headers }) {
+  const { res, bodyText: respText } = await tracedFetch(onTrace, {
+    label,
+    url,
+    method: "POST",
+    headers,
+    body: "{}",
+  });
+
+  if (!res.ok) {
+    throw new Error(`${label}: HTTP ${res.status} ${res.statusText}. Ver consola de trazas.`);
+  }
+
+  let data;
+  try {
+    data = JSON.parse(respText);
+  } catch (e) {
+    throw new Error(`La respuesta de ${label} no es JSON válido. Ver consola de trazas.`);
+  }
+
+  if (data?.success === false) {
+    throw new Error(data?.error?.errormessages?.[0] || `Error desconocido en ${label}`);
+  }
+
+  return data?.entity?.items || [];
+}
+
 async function fetchProjectUsage(project, period, onTrace) {
   const base = project.baseUrl.replace(/\/+$/, "");
   const fromISO = computeFromDateISO(period);
@@ -333,8 +387,19 @@ async function fetchProjectUsage(project, period, onTrace) {
     totalResolutionCount += ordResolution.count;
   }
 
+  const checkmobilItems = await fetchCheckmobilList(onTrace, {
+    label: "Check mobile (CheckmobilList)",
+    url: `${base}/api/webapicheckmobil/list`,
+    headers,
+  });
+  const checkmobil = checkmobilStats(checkmobilItems, fromDate);
+
   return {
     ...total,
+    checkmobilDemanat: checkmobil.demanat,
+    checkmobilRetornat: checkmobil.retornat,
+    checkmobilPendent: checkmobil.pendent,
+    checkmobilByEntity: checkmobil.byEntity,
     ordersClosedCount: totalResolutionCount,
     ordersAvgResolutionHours:
       totalResolutionCount > 0 ? totalResolutionHours / totalResolutionCount : null,
@@ -464,6 +529,9 @@ export default function ManttestUsageMonitor() {
           requestsModified: r?.requestsModified ?? 0,
           ordersCreated: r?.ordersCreated ?? 0,
           ordersModified: r?.ordersModified ?? 0,
+          checkmobilDemanat: r?.checkmobilDemanat ?? 0,
+          checkmobilRetornat: r?.checkmobilRetornat ?? 0,
+          checkmobilPendent: r?.checkmobilPendent ?? 0,
         };
       }),
     [projects, results]
@@ -1144,6 +1212,31 @@ export default function ManttestUsageMonitor() {
                                 </tr>
                               );
                             })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {r.checkmobilByEntity && r.checkmobilByEntity.length > 0 && (
+                      <div className="mum-module-table">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Entidad (check mobile)</th>
+                              <th>Demandados</th>
+                              <th>Retornados</th>
+                              <th>Pendientes</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {r.checkmobilByEntity.map((row) => (
+                              <tr key={row.entity}>
+                                <td>{row.entity}</td>
+                                <td>{row.demanat}</td>
+                                <td>{row.retornat}</td>
+                                <td>{row.pendent}</td>
+                              </tr>
+                            ))}
                           </tbody>
                         </table>
                       </div>
