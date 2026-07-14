@@ -8,6 +8,7 @@ import {
   CartesianGrid,
   Tooltip,
   Legend,
+  ReferenceLine,
 } from "recharts";
 import {
   Plus,
@@ -46,15 +47,24 @@ const MODULES = [
   { id: 3, label: "Jardinería" },
 ];
 
-const METRIC_META = [
+const USAGE_METRIC_META = [
   { key: "requestsCreated", label: "Solicitudes creadas", color: "#4FD8C4" },
   { key: "requestsModified", label: "Solicitudes modificadas", color: "#2FA69A" },
   { key: "ordersCreated", label: "Órdenes creadas", color: "#F2A65A" },
   { key: "ordersModified", label: "Órdenes modificadas", color: "#E0793C" },
+];
+
+const CHECKMOBIL_METRIC_META = [
   { key: "checkmobilDemanat", label: "Check mobile: demandados", color: "#4C8BF5" },
   { key: "checkmobilRetornat", label: "Check mobile: retornados", color: "#B34FD1" },
   { key: "checkmobilPendent", label: "Check mobile: pendientes", color: "#E0637C" },
 ];
+
+const METRIC_META = [...USAGE_METRIC_META, ...CHECKMOBIL_METRIC_META];
+
+// Valor de referencia de negocio: en un proyecto con uso normal se demandan
+// del orden de 258 registros de check mobile en el periodo.
+const NORMAL_CHECKMOBIL_DEMANAT = 258;
 
 function uid() {
   return Math.random().toString(36).slice(2, 10);
@@ -536,6 +546,16 @@ export default function ManttestUsageMonitor() {
       }),
     [projects, results]
   );
+
+  const chartTooltipProps = {
+    contentStyle: {
+      background: "#1a2029",
+      border: "1px solid #2b3342",
+      borderRadius: 8,
+      fontSize: 12,
+    },
+    labelStyle: { color: "#edeff3" },
+  };
 
   const hasAnySuccess = Object.values(status).some((s) => s === "success");
 
@@ -1256,34 +1276,63 @@ export default function ManttestUsageMonitor() {
         </div>
       )}
 
-      {/* Comparison chart */}
+      {/* Comparison charts */}
       {hasAnySuccess && (
-        <div className="mum-chart-section">
-          <p className="mum-chart-title">Comparativa entre proyectos</p>
-          <p className="mum-chart-sub">
-            {period === "week" ? "Última semana" : "Último mes"} · creadas vs. modificadas
-          </p>
-          <ResponsiveContainer width="100%" height={320}>
-            <BarChart data={chartData} margin={{ top: 4, right: 8, left: -12, bottom: 4 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#2b3342" />
-              <XAxis dataKey="name" stroke="#939cac" fontSize={12} />
-              <YAxis stroke="#939cac" fontSize={12} allowDecimals={false} />
-              <Tooltip
-                contentStyle={{
-                  background: "#1a2029",
-                  border: "1px solid #2b3342",
-                  borderRadius: 8,
-                  fontSize: 12,
-                }}
-                labelStyle={{ color: "#edeff3" }}
-              />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              {METRIC_META.map((m) => (
-                <Bar key={m.key} dataKey={m.key} name={m.label} fill={m.color} radius={[3, 3, 0, 0]} />
-              ))}
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
+        <>
+          <div className="mum-chart-section">
+            <p className="mum-chart-title">Comparativa entre proyectos · Solicitudes y órdenes</p>
+            <p className="mum-chart-sub">
+              {period === "week" ? "Última semana" : "Último mes"} · creadas vs. modificadas
+            </p>
+            <ResponsiveContainer width="100%" height={320}>
+              <BarChart data={chartData} margin={{ top: 4, right: 8, left: -12, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#2b3342" />
+                <XAxis dataKey="name" stroke="#939cac" fontSize={12} />
+                <YAxis stroke="#939cac" fontSize={12} allowDecimals={false} />
+                <Tooltip {...chartTooltipProps} />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                {USAGE_METRIC_META.map((m) => (
+                  <Bar key={m.key} dataKey={m.key} name={m.label} fill={m.color} radius={[3, 3, 0, 0]} />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="mum-chart-section">
+            <p className="mum-chart-title">Comparativa entre proyectos · Sincronización mobile</p>
+            <p className="mum-chart-sub">
+              {period === "week" ? "Última semana" : "Último mes"} · check mobile (demandados,
+              retornados, pendientes)
+            </p>
+            <ResponsiveContainer width="100%" height={320}>
+              <BarChart data={chartData} margin={{ top: 4, right: 8, left: -12, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#2b3342" />
+                <XAxis dataKey="name" stroke="#939cac" fontSize={12} />
+                <YAxis stroke="#939cac" fontSize={12} allowDecimals={false} />
+                <Tooltip {...chartTooltipProps} />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <ReferenceLine
+                  y={NORMAL_CHECKMOBIL_DEMANAT}
+                  stroke="#4C8BF5"
+                  strokeDasharray="4 4"
+                  label={{
+                    value: `Normal: ${NORMAL_CHECKMOBIL_DEMANAT}`,
+                    position: "insideTopRight",
+                    fill: "#4C8BF5",
+                    fontSize: 11,
+                  }}
+                />
+                {CHECKMOBIL_METRIC_META.map((m) => (
+                  <Bar key={m.key} dataKey={m.key} name={m.label} fill={m.color} radius={[3, 3, 0, 0]} />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+            <p className="mum-hint" style={{ marginTop: 8 }}>
+              Se considera normal demandar en torno a {NORMAL_CHECKMOBIL_DEMANAT} registros de check
+              mobile por proyecto en el periodo (línea discontinua).
+            </p>
+          </div>
+        </>
       )}
 
       <p className="mum-footer-note">
