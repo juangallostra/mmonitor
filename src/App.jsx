@@ -26,6 +26,7 @@ import {
   Terminal,
   Copy,
   Trash,
+  Smartphone,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -59,8 +60,6 @@ const CHECKMOBIL_METRIC_META = [
   { key: "checkmobilRetornat", label: "Check mobile: retornados", color: "#B34FD1" },
   { key: "checkmobilPendent", label: "Check mobile: pendientes", color: "#E0637C" },
 ];
-
-const METRIC_META = [...USAGE_METRIC_META, ...CHECKMOBIL_METRIC_META];
 
 // Valor de referencia de negocio: en un proyecto con uso normal se demandan
 // del orden de 258 registros de check mobile en el periodo.
@@ -294,10 +293,8 @@ async function fetchCheckmobilList(onTrace, { label, url, headers }) {
   return data?.entity?.items || [];
 }
 
-async function fetchProjectUsage(project, period, onTrace) {
+async function loginProject(project, onTrace) {
   const base = project.baseUrl.replace(/\/+$/, "");
-  const fromISO = computeFromDateISO(period);
-  const fromDate = new Date(fromISO);
 
   let loginBodyText;
   try {
@@ -344,10 +341,19 @@ async function fetchProjectUsage(project, period, onTrace) {
     );
   }
 
-  const headers = {
-    "Content-Type": "application/json",
-    "x-manttest-loginid": token,
+  return {
+    base,
+    headers: {
+      "Content-Type": "application/json",
+      "x-manttest-loginid": token,
+    },
   };
+}
+
+async function fetchProjectUsage(project, period, onTrace) {
+  const fromISO = computeFromDateISO(period);
+  const fromDate = new Date(fromISO);
+  const { base, headers } = await loginProject(project, onTrace);
 
   const byModule = {};
   const total = { requestsCreated: 0, requestsModified: 0, ordersCreated: 0, ordersModified: 0 };
@@ -397,6 +403,20 @@ async function fetchProjectUsage(project, period, onTrace) {
     totalResolutionCount += ordResolution.count;
   }
 
+  return {
+    ...total,
+    ordersClosedCount: totalResolutionCount,
+    ordersAvgResolutionHours:
+      totalResolutionCount > 0 ? totalResolutionHours / totalResolutionCount : null,
+    byModule,
+  };
+}
+
+async function fetchProjectMobileUsage(project, period, onTrace) {
+  const fromISO = computeFromDateISO(period);
+  const fromDate = new Date(fromISO);
+  const { base, headers } = await loginProject(project, onTrace);
+
   const checkmobilItems = await fetchCheckmobilList(onTrace, {
     label: "Check mobile (CheckmobilList)",
     url: `${base}/api/webapicheckmobil/list`,
@@ -405,15 +425,10 @@ async function fetchProjectUsage(project, period, onTrace) {
   const checkmobil = checkmobilStats(checkmobilItems, fromDate);
 
   return {
-    ...total,
     checkmobilDemanat: checkmobil.demanat,
     checkmobilRetornat: checkmobil.retornat,
     checkmobilPendent: checkmobil.pendent,
     checkmobilByEntity: checkmobil.byEntity,
-    ordersClosedCount: totalResolutionCount,
-    ordersAvgResolutionHours:
-      totalResolutionCount > 0 ? totalResolutionHours / totalResolutionCount : null,
-    byModule,
   };
 }
 
@@ -436,6 +451,11 @@ export default function ManttestUsageMonitor() {
   const [status, setStatus] = useState({});
   const [errors, setErrors] = useState({});
   const [lastUpdated, setLastUpdated] = useState({});
+
+  const [mobileResults, setMobileResults] = useState({});
+  const [mobileStatus, setMobileStatus] = useState({});
+  const [mobileErrors, setMobileErrors] = useState({});
+  const [mobileLastUpdated, setMobileLastUpdated] = useState({});
 
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
@@ -504,6 +524,21 @@ export default function ManttestUsageMonitor() {
       delete c[id];
       return c;
     });
+    setMobileResults((prev) => {
+      const c = { ...prev };
+      delete c[id];
+      return c;
+    });
+    setMobileStatus((prev) => {
+      const c = { ...prev };
+      delete c[id];
+      return c;
+    });
+    setMobileErrors((prev) => {
+      const c = { ...prev };
+      delete c[id];
+      return c;
+    });
   };
 
   const fetchOne = useCallback(
@@ -529,22 +564,46 @@ export default function ManttestUsageMonitor() {
     projects.forEach((p) => fetchOne(p, period));
   }, [projects, period, fetchOne]);
 
+  const fetchOneMobile = useCallback(
+    async (project, activePeriod) => {
+      setMobileStatus((prev) => ({ ...prev, [project.id]: "loading" }));
+      setMobileErrors((prev) => ({ ...prev, [project.id]: null }));
+      try {
+        const data = await fetchProjectMobileUsage(project, activePeriod, (entry) =>
+          addTrace(project.name, entry)
+        );
+        setMobileResults((prev) => ({ ...prev, [project.id]: data }));
+        setMobileStatus((prev) => ({ ...prev, [project.id]: "success" }));
+        setMobileLastUpdated((prev) => ({ ...prev, [project.id]: new Date() }));
+      } catch (e) {
+        setMobileStatus((prev) => ({ ...prev, [project.id]: "error" }));
+        setMobileErrors((prev) => ({ ...prev, [project.id]: e.message || "Error desconocido" }));
+      }
+    },
+    [addTrace]
+  );
+
+  const fetchAllMobile = useCallback(() => {
+    projects.forEach((p) => fetchOneMobile(p, period));
+  }, [projects, period, fetchOneMobile]);
+
   const chartData = useMemo(
     () =>
       projects.map((p) => {
         const r = results[p.id];
+        const mr = mobileResults[p.id];
         return {
           name: p.name,
           requestsCreated: r?.requestsCreated ?? 0,
           requestsModified: r?.requestsModified ?? 0,
           ordersCreated: r?.ordersCreated ?? 0,
           ordersModified: r?.ordersModified ?? 0,
-          checkmobilDemanat: r?.checkmobilDemanat ?? 0,
-          checkmobilRetornat: r?.checkmobilRetornat ?? 0,
-          checkmobilPendent: r?.checkmobilPendent ?? 0,
+          checkmobilDemanat: mr?.checkmobilDemanat ?? 0,
+          checkmobilRetornat: mr?.checkmobilRetornat ?? 0,
+          checkmobilPendent: mr?.checkmobilPendent ?? 0,
         };
       }),
-    [projects, results]
+    [projects, results, mobileResults]
   );
 
   const chartTooltipProps = {
@@ -557,7 +616,8 @@ export default function ManttestUsageMonitor() {
     labelStyle: { color: "#edeff3" },
   };
 
-  const hasAnySuccess = Object.values(status).some((s) => s === "success");
+  const hasAnyUsageSuccess = Object.values(status).some((s) => s === "success");
+  const hasAnyMobileSuccess = Object.values(mobileStatus).some((s) => s === "success");
 
   return (
     <div className="mum-root">
@@ -1012,6 +1072,10 @@ export default function ManttestUsageMonitor() {
           <RefreshCw size={14} /> Actualizar todos
         </button>
 
+        <button className="mum-btn" onClick={fetchAllMobile} disabled={projects.length === 0}>
+          <Smartphone size={14} /> Actualizar mobile (todos)
+        </button>
+
         <button className="mum-btn" onClick={openNewForm}>
           <Plus size={14} /> Añadir proyecto
         </button>
@@ -1137,6 +1201,14 @@ export default function ManttestUsageMonitor() {
             const maxVal = r
               ? Math.max(1, r.requestsCreated, r.requestsModified, r.ordersCreated, r.ordersModified)
               : 1;
+
+            const mr = mobileResults[p.id];
+            const mst = mobileStatus[p.id] || "idle";
+            const merr = mobileErrors[p.id];
+            const mobileMaxVal = mr
+              ? Math.max(1, mr.checkmobilDemanat, mr.checkmobilRetornat, mr.checkmobilPendent)
+              : 1;
+
             return (
               <div className="mum-card" key={p.id}>
                 <div className="mum-card-head">
@@ -1145,11 +1217,26 @@ export default function ManttestUsageMonitor() {
                     <p className="mum-card-url">{p.baseUrl}</p>
                   </div>
                   <div className="mum-card-actions">
-                    <button className="mum-icon-btn" onClick={() => fetchOne(p, period)} title="Actualizar">
+                    <button
+                      className="mum-icon-btn"
+                      onClick={() => fetchOne(p, period)}
+                      title="Actualizar solicitudes y órdenes"
+                    >
                       {st === "loading" ? (
                         <Loader2 size={14} className="mum-spin" style={{ animation: "spin 0.8s linear infinite" }} />
                       ) : (
                         <RefreshCw size={14} />
+                      )}
+                    </button>
+                    <button
+                      className="mum-icon-btn"
+                      onClick={() => fetchOneMobile(p, period)}
+                      title="Actualizar check mobile"
+                    >
+                      {mst === "loading" ? (
+                        <Loader2 size={14} className="mum-spin" style={{ animation: "spin 0.8s linear infinite" }} />
+                      ) : (
+                        <Smartphone size={14} />
                       )}
                     </button>
                     <button className="mum-icon-btn" onClick={() => openEditForm(p)} title="Editar">
@@ -1166,14 +1253,15 @@ export default function ManttestUsageMonitor() {
                   {st === "error" && <AlertTriangle size={12} style={{ color: "var(--danger)" }} />}
                   {st === "loading" && <Radio size={12} style={{ color: "var(--amber)" }} />}
                   <span className="mum-mono">
-                    {st === "idle" && "Sin datos todavía"}
-                    {st === "loading" && "Consultando…"}
+                    Solicitudes/órdenes:{" "}
+                    {st === "idle" && "sin datos todavía"}
+                    {st === "loading" && "consultando…"}
                     {st === "success" &&
-                      `Actualizado ${lastUpdated[p.id]?.toLocaleTimeString("es-ES", {
+                      `actualizado ${lastUpdated[p.id]?.toLocaleTimeString("es-ES", {
                         hour: "2-digit",
                         minute: "2-digit",
                       })}`}
-                    {st === "error" && "Error en la consulta"}
+                    {st === "error" && "error en la consulta"}
                   </span>
                 </div>
 
@@ -1182,7 +1270,7 @@ export default function ManttestUsageMonitor() {
                 {r && st !== "error" && (
                   <>
                     <div className="mum-pulse-strip">
-                      {METRIC_META.map((m) => (
+                      {USAGE_METRIC_META.map((m) => (
                         <div
                           key={m.key}
                           className="mum-pulse-bar"
@@ -1195,7 +1283,7 @@ export default function ManttestUsageMonitor() {
                       ))}
                     </div>
                     <div className="mum-metrics">
-                      {METRIC_META.map((m) => (
+                      {USAGE_METRIC_META.map((m) => (
                         <div className="mum-metric" key={m.key}>
                           <div className="mum-metric-value" style={{ color: m.color }}>
                             {r[m.key]}
@@ -1220,43 +1308,18 @@ export default function ManttestUsageMonitor() {
                           </thead>
                           <tbody>
                             {MODULES.map((module) => {
-                              const mr = r.byModule[module.id];
+                              const modRow = r.byModule[module.id];
                               return (
                                 <tr key={module.id}>
                                   <td>{module.label}</td>
-                                  <td>{mr?.requestsCreated ?? 0}</td>
-                                  <td>{mr?.requestsModified ?? 0}</td>
-                                  <td>{mr?.ordersCreated ?? 0}</td>
-                                  <td>{mr?.ordersModified ?? 0}</td>
-                                  <td>{formatDuration(mr?.ordersAvgResolutionHours)}</td>
+                                  <td>{modRow?.requestsCreated ?? 0}</td>
+                                  <td>{modRow?.requestsModified ?? 0}</td>
+                                  <td>{modRow?.ordersCreated ?? 0}</td>
+                                  <td>{modRow?.ordersModified ?? 0}</td>
+                                  <td>{formatDuration(modRow?.ordersAvgResolutionHours)}</td>
                                 </tr>
                               );
                             })}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-
-                    {r.checkmobilByEntity && r.checkmobilByEntity.length > 0 && (
-                      <div className="mum-module-table">
-                        <table>
-                          <thead>
-                            <tr>
-                              <th>Entidad (check mobile)</th>
-                              <th>Demandados</th>
-                              <th>Retornados</th>
-                              <th>Pendientes</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {r.checkmobilByEntity.map((row) => (
-                              <tr key={row.entity}>
-                                <td>{row.entity}</td>
-                                <td>{row.demanat}</td>
-                                <td>{row.retornat}</td>
-                                <td>{row.pendent}</td>
-                              </tr>
-                            ))}
                           </tbody>
                         </table>
                       </div>
@@ -1270,6 +1333,78 @@ export default function ManttestUsageMonitor() {
                     )}
                   </>
                 )}
+
+                <div className="mum-status-row" style={{ marginTop: 12 }}>
+                  {mst === "success" && <CheckCircle2 size={12} style={{ color: "var(--teal)" }} />}
+                  {mst === "error" && <AlertTriangle size={12} style={{ color: "var(--danger)" }} />}
+                  {mst === "loading" && <Radio size={12} style={{ color: "var(--amber)" }} />}
+                  <span className="mum-mono">
+                    Check mobile:{" "}
+                    {mst === "idle" && "sin datos todavía"}
+                    {mst === "loading" && "consultando…"}
+                    {mst === "success" &&
+                      `actualizado ${mobileLastUpdated[p.id]?.toLocaleTimeString("es-ES", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}`}
+                    {mst === "error" && "error en la consulta"}
+                  </span>
+                </div>
+
+                {mst === "error" && merr && <div className="mum-error-box">{merr}</div>}
+
+                {mr && mst !== "error" && (
+                  <>
+                    <div className="mum-pulse-strip">
+                      {CHECKMOBIL_METRIC_META.map((m) => (
+                        <div
+                          key={m.key}
+                          className="mum-pulse-bar"
+                          style={{
+                            height: `${Math.max(6, (mr[m.key] / mobileMaxVal) * 44)}px`,
+                            background: m.color,
+                          }}
+                          title={`${m.label}: ${mr[m.key]}`}
+                        />
+                      ))}
+                    </div>
+                    <div className="mum-metrics">
+                      {CHECKMOBIL_METRIC_META.map((m) => (
+                        <div className="mum-metric" key={m.key}>
+                          <div className="mum-metric-value" style={{ color: m.color }}>
+                            {mr[m.key]}
+                          </div>
+                          <div className="mum-metric-label">{m.label}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {mr.checkmobilByEntity && mr.checkmobilByEntity.length > 0 && (
+                      <div className="mum-module-table">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Entidad (check mobile)</th>
+                              <th>Demandados</th>
+                              <th>Retornados</th>
+                              <th>Pendientes</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {mr.checkmobilByEntity.map((row) => (
+                              <tr key={row.entity}>
+                                <td>{row.entity}</td>
+                                <td>{row.demanat}</td>
+                                <td>{row.retornat}</td>
+                                <td>{row.pendent}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             );
           })}
@@ -1277,62 +1412,62 @@ export default function ManttestUsageMonitor() {
       )}
 
       {/* Comparison charts */}
-      {hasAnySuccess && (
-        <>
-          <div className="mum-chart-section">
-            <p className="mum-chart-title">Comparativa entre proyectos · Solicitudes y órdenes</p>
-            <p className="mum-chart-sub">
-              {period === "week" ? "Última semana" : "Último mes"} · creadas vs. modificadas
-            </p>
-            <ResponsiveContainer width="100%" height={320}>
-              <BarChart data={chartData} margin={{ top: 4, right: 8, left: -12, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#2b3342" />
-                <XAxis dataKey="name" stroke="#939cac" fontSize={12} />
-                <YAxis stroke="#939cac" fontSize={12} allowDecimals={false} />
-                <Tooltip {...chartTooltipProps} />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-                {USAGE_METRIC_META.map((m) => (
-                  <Bar key={m.key} dataKey={m.key} name={m.label} fill={m.color} radius={[3, 3, 0, 0]} />
-                ))}
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+      {hasAnyUsageSuccess && (
+        <div className="mum-chart-section">
+          <p className="mum-chart-title">Comparativa entre proyectos · Solicitudes y órdenes</p>
+          <p className="mum-chart-sub">
+            {period === "week" ? "Última semana" : "Último mes"} · creadas vs. modificadas
+          </p>
+          <ResponsiveContainer width="100%" height={320}>
+            <BarChart data={chartData} margin={{ top: 4, right: 8, left: -12, bottom: 4 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#2b3342" />
+              <XAxis dataKey="name" stroke="#939cac" fontSize={12} />
+              <YAxis stroke="#939cac" fontSize={12} allowDecimals={false} />
+              <Tooltip {...chartTooltipProps} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              {USAGE_METRIC_META.map((m) => (
+                <Bar key={m.key} dataKey={m.key} name={m.label} fill={m.color} radius={[3, 3, 0, 0]} />
+              ))}
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
 
-          <div className="mum-chart-section">
-            <p className="mum-chart-title">Comparativa entre proyectos · Sincronización mobile</p>
-            <p className="mum-chart-sub">
-              {period === "week" ? "Última semana" : "Último mes"} · check mobile (demandados,
-              retornados, pendientes)
-            </p>
-            <ResponsiveContainer width="100%" height={320}>
-              <BarChart data={chartData} margin={{ top: 4, right: 8, left: -12, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#2b3342" />
-                <XAxis dataKey="name" stroke="#939cac" fontSize={12} />
-                <YAxis stroke="#939cac" fontSize={12} allowDecimals={false} />
-                <Tooltip {...chartTooltipProps} />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-                <ReferenceLine
-                  y={NORMAL_CHECKMOBIL_DEMANAT}
-                  stroke="#4C8BF5"
-                  strokeDasharray="4 4"
-                  label={{
-                    value: `Normal: ${NORMAL_CHECKMOBIL_DEMANAT}`,
-                    position: "insideTopRight",
-                    fill: "#4C8BF5",
-                    fontSize: 11,
-                  }}
-                />
-                {CHECKMOBIL_METRIC_META.map((m) => (
-                  <Bar key={m.key} dataKey={m.key} name={m.label} fill={m.color} radius={[3, 3, 0, 0]} />
-                ))}
-              </BarChart>
-            </ResponsiveContainer>
-            <p className="mum-hint" style={{ marginTop: 8 }}>
-              Se considera normal demandar en torno a {NORMAL_CHECKMOBIL_DEMANAT} registros de check
-              mobile por proyecto en el periodo (línea discontinua).
-            </p>
-          </div>
-        </>
+      {hasAnyMobileSuccess && (
+        <div className="mum-chart-section" style={{ marginTop: hasAnyUsageSuccess ? 20 : 0 }}>
+          <p className="mum-chart-title">Comparativa entre proyectos · Sincronización mobile</p>
+          <p className="mum-chart-sub">
+            {period === "week" ? "Última semana" : "Último mes"} · check mobile (demandados,
+            retornados, pendientes)
+          </p>
+          <ResponsiveContainer width="100%" height={320}>
+            <BarChart data={chartData} margin={{ top: 4, right: 8, left: -12, bottom: 4 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#2b3342" />
+              <XAxis dataKey="name" stroke="#939cac" fontSize={12} />
+              <YAxis stroke="#939cac" fontSize={12} allowDecimals={false} />
+              <Tooltip {...chartTooltipProps} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <ReferenceLine
+                y={NORMAL_CHECKMOBIL_DEMANAT}
+                stroke="#4C8BF5"
+                strokeDasharray="4 4"
+                label={{
+                  value: `Normal: ${NORMAL_CHECKMOBIL_DEMANAT}`,
+                  position: "insideTopRight",
+                  fill: "#4C8BF5",
+                  fontSize: 11,
+                }}
+              />
+              {CHECKMOBIL_METRIC_META.map((m) => (
+                <Bar key={m.key} dataKey={m.key} name={m.label} fill={m.color} radius={[3, 3, 0, 0]} />
+              ))}
+            </BarChart>
+          </ResponsiveContainer>
+          <p className="mum-hint" style={{ marginTop: 8 }}>
+            Se considera normal demandar en torno a {NORMAL_CHECKMOBIL_DEMANAT} registros de check
+            mobile por proyecto en el periodo (línea discontinua).
+          </p>
+        </div>
       )}
 
       <p className="mum-footer-note">
