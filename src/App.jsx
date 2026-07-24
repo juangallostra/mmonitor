@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
 import {
   ResponsiveContainer,
   BarChart,
@@ -27,6 +27,8 @@ import {
   Copy,
   Trash,
   Smartphone,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -444,8 +446,26 @@ const emptyForm = {
   orderListTemplate: DEFAULT_ORDER_LIST_TEMPLATE,
 };
 
+const STORAGE_KEY = "mmonitor_projects_v1";
+
+function loadStoredProjects() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function deriveProjectCodeFromUrl(url) {
+  const match = url.trim().replace(/\/+$/, "").match(/([^/]+)\/?$/);
+  return match ? match[1] : "";
+}
+
 export default function ManttestUsageMonitor() {
-  const [projects, setProjects] = useState([]);
+  const [projects, setProjects] = useState(loadStoredProjects);
   const [period, setPeriod] = useState("week");
   const [results, setResults] = useState({});
   const [status, setStatus] = useState({});
@@ -459,8 +479,15 @@ export default function ManttestUsageMonitor() {
 
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
+  const [formErrors, setFormErrors] = useState({});
+  const [showPassword, setShowPassword] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [bannerOpen, setBannerOpen] = useState(true);
+
+  useEffect(() => {
+    const toStore = projects.map(({ password, ...rest }) => rest);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(toStore));
+  }, [projects]);
 
   const [traces, setTraces] = useState([]);
   const [consoleOpen, setConsoleOpen] = useState(false);
@@ -485,20 +512,71 @@ export default function ManttestUsageMonitor() {
 
   const openNewForm = () => {
     setForm(emptyForm);
+    setFormErrors({});
+    setShowPassword(false);
     setAdvancedOpen(false);
     setFormOpen(true);
   };
 
   const openEditForm = (p) => {
-    setForm({ ...p });
+    setForm({ ...emptyForm, ...p });
+    setFormErrors({});
+    setShowPassword(false);
+    setAdvancedOpen(false);
+    setFormOpen(true);
+  };
+
+  const duplicateProject = (p) => {
+    setForm({ ...emptyForm, ...p, id: null, name: `${p.name} (copia)`, projectCode: "" });
+    setFormErrors({});
+    setShowPassword(false);
     setAdvancedOpen(false);
     setFormOpen(true);
   };
 
   const closeForm = () => setFormOpen(false);
 
+  const setFormField = (field, value) => {
+    setForm((prev) => ({ ...prev, [field]: value }));
+    if (formErrors[field]) setFormErrors((prev) => ({ ...prev, [field]: undefined }));
+  };
+
+  const TEMPLATE_FIELDS = [
+    ["loginTemplate", "login"],
+    ["requestListTemplate", "listado de solicitudes"],
+    ["orderListTemplate", "listado de órdenes"],
+  ];
+
   const saveForm = () => {
-    if (!form.name.trim() || !form.baseUrl.trim() || !form.projectCode.trim()) return;
+    const errs = {};
+    if (!form.name.trim()) errs.name = "El nombre es obligatorio.";
+    if (!form.baseUrl.trim()) errs.baseUrl = "La URL base es obligatoria.";
+    if (!form.projectCode.trim()) errs.projectCode = "El código de proyecto es obligatorio.";
+
+    for (const [field, label] of TEMPLATE_FIELDS) {
+      try {
+        const filled = fillTemplate(form[field], {
+          proyecto: "x",
+          usuario: "x",
+          password: "x",
+          fromDate: "2024-01-01T00:00:00",
+          pageIndex: "0",
+          module: "1",
+        });
+        JSON.parse(filled);
+      } catch (e) {
+        errs[field] = `La plantilla de ${label} no es un JSON válido.`;
+      }
+    }
+
+    setFormErrors(errs);
+    if (Object.keys(errs).length > 0) {
+      if (errs.loginTemplate || errs.requestListTemplate || errs.orderListTemplate) {
+        setAdvancedOpen(true);
+      }
+      return;
+    }
+
     if (form.id) {
       setProjects((prev) => prev.map((p) => (p.id === form.id ? { ...form } : p)));
     } else {
@@ -911,6 +989,24 @@ export default function ManttestUsageMonitor() {
           font-family: inherit;
         }
         .mum-input:focus { outline: none; border-color: var(--teal); }
+        .mum-input-error { border-color: var(--danger) !important; }
+        .mum-field-error { font-size: 10.5px; color: var(--danger); margin: 4px 0 0 0; }
+        .mum-input-wrap { position: relative; }
+        .mum-input-wrap .mum-input { padding-right: 34px; }
+        .mum-input-toggle {
+          position: absolute;
+          right: 6px;
+          top: 50%;
+          transform: translateY(-50%);
+          background: none;
+          border: none;
+          color: var(--text-faint);
+          cursor: pointer;
+          padding: 4px;
+          display: flex;
+          border-radius: 5px;
+        }
+        .mum-input-toggle:hover { color: var(--text); background: var(--surface-alt); }
         .mum-textarea {
           width: 100%;
           background: var(--surface-alt);
@@ -1043,7 +1139,9 @@ export default function ManttestUsageMonitor() {
             Las peticiones salen directamente desde tu navegador hacia cada servidor manttest.
             Si el servidor no permite CORS desde este origen, las llamadas fallarán con un
             error de red — en ese caso, contacta con quien administre manttest para habilitarlo.
-            Las credenciales solo viven en esta sesión: no se guardan en ningún sitio.
+            Los proyectos (nombre, URL, código y usuario) se guardan en este navegador para no
+            tener que volver a escribirlos. La contraseña nunca se guarda: solo vive en esta
+            sesión y habrá que introducirla de nuevo tras recargar.
           </div>
           <button className="mum-banner-close" onClick={() => setBannerOpen(false)}>
             <X size={14} />
@@ -1241,6 +1339,9 @@ export default function ManttestUsageMonitor() {
                     </button>
                     <button className="mum-icon-btn" onClick={() => openEditForm(p)} title="Editar">
                       <Pencil size={14} />
+                    </button>
+                    <button className="mum-icon-btn" onClick={() => duplicateProject(p)} title="Duplicar proyecto">
+                      <Copy size={14} />
                     </button>
                     <button className="mum-icon-btn" onClick={() => removeProject(p.id)} title="Eliminar">
                       <Trash2 size={14} />
@@ -1471,8 +1572,8 @@ export default function ManttestUsageMonitor() {
       )}
 
       <p className="mum-footer-note">
-        Los datos viven solo en esta sesión del navegador — al recargar tendrás que añadir los
-        proyectos de nuevo.
+        Los proyectos se guardan en este navegador — al recargar seguirán aquí, pero tendrás que
+        volver a introducir la contraseña de cada uno antes de consultarlo.
       </p>
 
       {/* Modal form */}
@@ -1489,30 +1590,44 @@ export default function ManttestUsageMonitor() {
             <div className="mum-field">
               <label className="mum-label">Nombre del proyecto</label>
               <input
-                className="mum-input"
+                className={`mum-input ${formErrors.name ? "mum-input-error" : ""}`}
                 value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                onChange={(e) => setFormField("name", e.target.value)}
                 placeholder="Ej. Cliente Norte"
               />
+              {formErrors.name && <p className="mum-field-error">{formErrors.name}</p>}
             </div>
 
             <div className="mum-field">
               <label className="mum-label">URL base de la API</label>
               <input
-                className="mum-input"
+                className={`mum-input ${formErrors.baseUrl ? "mum-input-error" : ""}`}
                 value={form.baseUrl}
-                onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setForm((prev) => ({
+                    ...prev,
+                    baseUrl: value,
+                    projectCode: prev.projectCode.trim()
+                      ? prev.projectCode
+                      : deriveProjectCodeFromUrl(value),
+                  }));
+                  if (formErrors.baseUrl) setFormErrors((prev) => ({ ...prev, baseUrl: undefined }));
+                }}
                 placeholder="https://saas.manttest.net/MTW_xxxx"
               />
+              {formErrors.baseUrl && <p className="mum-field-error">{formErrors.baseUrl}</p>}
             </div>
 
             <div className="mum-field">
               <label className="mum-label">Código de proyecto</label>
               <input
-                className="mum-input"
+                className={`mum-input ${formErrors.projectCode ? "mum-input-error" : ""}`}
                 value={form.projectCode}
-                onChange={(e) => setForm({ ...form, projectCode: e.target.value })}
+                onChange={(e) => setFormField("projectCode", e.target.value)}
+                placeholder="Se autocompleta desde la URL base; edítalo si no coincide"
               />
+              {formErrors.projectCode && <p className="mum-field-error">{formErrors.projectCode}</p>}
             </div>
 
             <div className="mum-field">
@@ -1520,18 +1635,32 @@ export default function ManttestUsageMonitor() {
               <input
                 className="mum-input"
                 value={form.username}
-                onChange={(e) => setForm({ ...form, username: e.target.value })}
+                onChange={(e) => setFormField("username", e.target.value)}
               />
             </div>
 
             <div className="mum-field">
               <label className="mum-label">Contraseña</label>
-              <input
-                className="mum-input"
-                type="password"
-                value={form.password}
-                onChange={(e) => setForm({ ...form, password: e.target.value })}
-              />
+              <div className="mum-input-wrap">
+                <input
+                  className="mum-input"
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="new-password"
+                  value={form.password}
+                  onChange={(e) => setFormField("password", e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="mum-input-toggle"
+                  onClick={() => setShowPassword((v) => !v)}
+                  title={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+                >
+                  {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+              </div>
+              <p className="mum-hint">
+                No se guarda: tras recargar la página tendrás que volver a introducirla.
+              </p>
             </div>
 
             <button className="mum-advanced-toggle" onClick={() => setAdvancedOpen(!advancedOpen)}>
@@ -1544,10 +1673,13 @@ export default function ManttestUsageMonitor() {
                 <div className="mum-field">
                   <label className="mum-label">Plantilla del body de login</label>
                   <textarea
-                    className="mum-textarea"
+                    className={`mum-textarea ${formErrors.loginTemplate ? "mum-input-error" : ""}`}
                     value={form.loginTemplate}
-                    onChange={(e) => setForm({ ...form, loginTemplate: e.target.value })}
+                    onChange={(e) => setFormField("loginTemplate", e.target.value)}
                   />
+                  {formErrors.loginTemplate && (
+                    <p className="mum-field-error">{formErrors.loginTemplate}</p>
+                  )}
                   <p className="mum-hint">
                     Placeholders disponibles: {"{{proyecto}}"}, {"{{usuario}}"}, {"{{password}}"}.
                     Ajusta los nombres de los campos JSON si no coinciden con tu API.
@@ -1556,10 +1688,13 @@ export default function ManttestUsageMonitor() {
                 <div className="mum-field">
                   <label className="mum-label">Plantilla del body de listado (solicitudes)</label>
                   <textarea
-                    className="mum-textarea"
+                    className={`mum-textarea ${formErrors.requestListTemplate ? "mum-input-error" : ""}`}
                     value={form.requestListTemplate}
-                    onChange={(e) => setForm({ ...form, requestListTemplate: e.target.value })}
+                    onChange={(e) => setFormField("requestListTemplate", e.target.value)}
                   />
+                  {formErrors.requestListTemplate && (
+                    <p className="mum-field-error">{formErrors.requestListTemplate}</p>
+                  )}
                   <p className="mum-hint">
                     Placeholders disponibles: {"{{fromDate}}"} (fecha ISO en UTC calculada según el
                     periodo seleccionado), {"{{pageIndex}}"} (número de página, empezando en 0; la
@@ -1570,10 +1705,13 @@ export default function ManttestUsageMonitor() {
                 <div className="mum-field">
                   <label className="mum-label">Plantilla del body de listado (órdenes)</label>
                   <textarea
-                    className="mum-textarea"
+                    className={`mum-textarea ${formErrors.orderListTemplate ? "mum-input-error" : ""}`}
                     value={form.orderListTemplate}
-                    onChange={(e) => setForm({ ...form, orderListTemplate: e.target.value })}
+                    onChange={(e) => setFormField("orderListTemplate", e.target.value)}
                   />
+                  {formErrors.orderListTemplate && (
+                    <p className="mum-field-error">{formErrors.orderListTemplate}</p>
+                  )}
                   <p className="mum-hint">
                     Placeholders disponibles: {"{{fromDate}}"} (fecha ISO en UTC calculada según el
                     periodo seleccionado), {"{{pageIndex}}"} (número de página, empezando en 0; la
