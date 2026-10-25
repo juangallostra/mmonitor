@@ -1,0 +1,14 @@
+[
+  {
+    "proyecto": "MTW_cliente_norte",
+    "usuario": "admin",
+    "contraseña": "cambia-esto"
+  },
+  {
+    "nombre": "Cliente Sur",
+    "proyecto": "MTW_cliente_sur",
+    "usuario": "admin",
+    "contraseña": "cambia-esto",
+    "url": "https://saas.manttest.net/MTW_cliente_sur"
+  }
+]

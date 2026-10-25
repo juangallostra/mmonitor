@@ -1,3 +1,5 @@
 node_modules
 dist
 .DS_Store
+# Proyectos con contraseñas en claro: solo se sube la versión cifrada
+projects.json

@@ -29,7 +29,10 @@ import {
   Smartphone,
   Eye,
   EyeOff,
+  LogOut,
+  Lock,
 } from "lucide-react";
+import { loadLocalProjects, saveLocalProjects } from "./auth/session.js";
 
 // ---------------------------------------------------------------------------
 // Config por defecto — plantillas de petición.
@@ -446,26 +449,19 @@ const emptyForm = {
   orderListTemplate: DEFAULT_ORDER_LIST_TEMPLATE,
 };
 
-const STORAGE_KEY = "mmonitor_projects_v1";
-
-function loadStoredProjects() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (e) {
-    return [];
-  }
-}
-
 function deriveProjectCodeFromUrl(url) {
   const match = url.trim().replace(/\/+$/, "").match(/([^/]+)\/?$/);
   return match ? match[1] : "";
 }
 
-export default function ManttestUsageMonitor() {
-  const [projects, setProjects] = useState(loadStoredProjects);
+export default function ManttestUsageMonitor({ session, onLogout }) {
+  // Proyectos de projects.json (solo lectura) + los añadidos desde la interfaz.
+  const [localProjects, setLocalProjects] = useState([]);
+  const [localLoaded, setLocalLoaded] = useState(false);
+  const projects = useMemo(
+    () => [...session.jsonProjects.map((p) => ({ ...emptyForm, ...p })), ...localProjects],
+    [session.jsonProjects, localProjects]
+  );
   const [period, setPeriod] = useState("week");
   const [results, setResults] = useState({});
   const [status, setStatus] = useState({});
@@ -485,9 +481,15 @@ export default function ManttestUsageMonitor() {
   const [bannerOpen, setBannerOpen] = useState(true);
 
   useEffect(() => {
-    const toStore = projects.map(({ password, ...rest }) => rest);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(toStore));
-  }, [projects]);
+    loadLocalProjects(session.key).then((list) => {
+      setLocalProjects(list);
+      setLocalLoaded(true);
+    });
+  }, [session.key]);
+
+  useEffect(() => {
+    if (localLoaded) saveLocalProjects(session.key, localProjects);
+  }, [localLoaded, localProjects, session.key]);
 
   const [traces, setTraces] = useState([]);
   const [consoleOpen, setConsoleOpen] = useState(false);
@@ -527,7 +529,14 @@ export default function ManttestUsageMonitor() {
   };
 
   const duplicateProject = (p) => {
-    setForm({ ...emptyForm, ...p, id: null, name: `${p.name} (copia)`, projectCode: "" });
+    setForm({
+      ...emptyForm,
+      ...p,
+      id: null,
+      source: "local",
+      name: `${p.name} (copia)`,
+      projectCode: "",
+    });
     setFormErrors({});
     setShowPassword(false);
     setAdvancedOpen(false);
@@ -578,15 +587,15 @@ export default function ManttestUsageMonitor() {
     }
 
     if (form.id) {
-      setProjects((prev) => prev.map((p) => (p.id === form.id ? { ...form } : p)));
+      setLocalProjects((prev) => prev.map((p) => (p.id === form.id ? { ...form } : p)));
     } else {
-      setProjects((prev) => [...prev, { ...form, id: uid() }]);
+      setLocalProjects((prev) => [...prev, { ...form, id: uid(), source: "local" }]);
     }
     setFormOpen(false);
   };
 
   const removeProject = (id) => {
-    setProjects((prev) => prev.filter((p) => p.id !== id));
+    setLocalProjects((prev) => prev.filter((p) => p.id !== id));
     setResults((prev) => {
       const c = { ...prev };
       delete c[id];
@@ -1130,6 +1139,14 @@ export default function ManttestUsageMonitor() {
             </p>
           </div>
         </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span className="mum-mono" style={{ fontSize: 12, color: "var(--text-dim)" }}>
+            {session.username}
+          </span>
+          <button className="mum-btn ghost small" onClick={onLogout} title="Cerrar sesión">
+            <LogOut size={13} /> Salir
+          </button>
+        </div>
       </div>
 
       {bannerOpen && (
@@ -1139,9 +1156,8 @@ export default function ManttestUsageMonitor() {
             Las peticiones salen directamente desde tu navegador hacia cada servidor manttest.
             Si el servidor no permite CORS desde este origen, las llamadas fallarán con un
             error de red — en ese caso, contacta con quien administre manttest para habilitarlo.
-            Los proyectos (nombre, URL, código y usuario) se guardan en este navegador para no
-            tener que volver a escribirlos. La contraseña nunca se guarda: solo vive en esta
-            sesión y habrá que introducirla de nuevo tras recargar.
+            Los proyectos marcados con candado vienen de projects.json; los que añadas aquí se
+            guardan cifrados en este navegador.
           </div>
           <button className="mum-banner-close" onClick={() => setBannerOpen(false)}>
             <X size={14} />
@@ -1311,7 +1327,16 @@ export default function ManttestUsageMonitor() {
               <div className="mum-card" key={p.id}>
                 <div className="mum-card-head">
                   <div>
-                    <p className="mum-card-name">{p.name}</p>
+                    <p className="mum-card-name">
+                      {p.source === "json" && (
+                        <Lock
+                          size={11}
+                          style={{ color: "var(--text-faint)", marginRight: 5, verticalAlign: -1 }}
+                          aria-label="Configurado en projects.json"
+                        />
+                      )}
+                      {p.name}
+                    </p>
                     <p className="mum-card-url">{p.baseUrl}</p>
                   </div>
                   <div className="mum-card-actions">
@@ -1337,15 +1362,19 @@ export default function ManttestUsageMonitor() {
                         <Smartphone size={14} />
                       )}
                     </button>
-                    <button className="mum-icon-btn" onClick={() => openEditForm(p)} title="Editar">
-                      <Pencil size={14} />
-                    </button>
+                    {p.source !== "json" && (
+                      <button className="mum-icon-btn" onClick={() => openEditForm(p)} title="Editar">
+                        <Pencil size={14} />
+                      </button>
+                    )}
                     <button className="mum-icon-btn" onClick={() => duplicateProject(p)} title="Duplicar proyecto">
                       <Copy size={14} />
                     </button>
-                    <button className="mum-icon-btn" onClick={() => removeProject(p.id)} title="Eliminar">
-                      <Trash2 size={14} />
-                    </button>
+                    {p.source !== "json" && (
+                      <button className="mum-icon-btn" onClick={() => removeProject(p.id)} title="Eliminar">
+                        <Trash2 size={14} />
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -1572,8 +1601,8 @@ export default function ManttestUsageMonitor() {
       )}
 
       <p className="mum-footer-note">
-        Los proyectos se guardan en este navegador — al recargar seguirán aquí, pero tendrás que
-        volver a introducir la contraseña de cada uno antes de consultarlo.
+        Para que un proyecto esté disponible en cualquier navegador, añádelo a projects.json y
+        ejecuta npm run secrets.
       </p>
 
       {/* Modal form */}
@@ -1659,7 +1688,7 @@ export default function ManttestUsageMonitor() {
                 </button>
               </div>
               <p className="mum-hint">
-                No se guarda: tras recargar la página tendrás que volver a introducirla.
+                Se guarda cifrada en este navegador con tu contraseña de acceso.
               </p>
             </div>
 
